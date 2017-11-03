@@ -30,6 +30,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	v1 "k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/containernetworking/cni/pkg/invoke"
@@ -284,16 +285,28 @@ func createK8sClient(kubeconfig string) (*kubernetes.Clientset, error) {
 	return kubernetes.NewForConfig(config)
 }
 
-func getPodNetworkAnnotation(client *kubernetes.Clientset, k8sArgs K8sArgs) (string, error) {
-	var annot string
+func getPod(client *kubernetes.Clientset, k8sArgs K8sArgs) (*v1.Pod, error) {
+	var pod *v1.Pod
 	var err error
 
-	pod, err := client.Pods(string(k8sArgs.K8S_POD_NAMESPACE)).Get(fmt.Sprintf("%s", string(k8sArgs.K8S_POD_NAME)), metav1.GetOptions{})
+	pod, err = client.Pods(string(k8sArgs.K8S_POD_NAMESPACE)).Get(fmt.Sprintf("%s", string(k8sArgs.K8S_POD_NAME)), metav1.GetOptions{})
 	if err != nil {
-		return annot, fmt.Errorf("getPodNetworkAnnotation: failed to query the pod %v in out of cluster comm", string(k8sArgs.K8S_POD_NAME))
+		return pod, fmt.Errorf("getPod: failed to query the pod %v in out of cluster comm", string(k8sArgs.K8S_POD_NAME))
 	}
 
-	return pod.Annotations["networks"], nil
+	return pod, nil
+}
+
+func getNode(client *kubernetes.Clientset, nodeName string) (*v1.Node, error) {
+	var node *v1.Node
+	var err error
+
+	node, err = client.Nodes().Get(nodeName, metav1.GetOptions{})
+	if err != nil {
+		return node, fmt.Errorf("getNode: failed to query the node %v in out of cluster comm", nodeName)
+	}
+
+	return node, nil
 }
 
 func parsePodNetworkObject(podnetwork string) ([]map[string]interface{}, error) {
@@ -335,16 +348,23 @@ func getpluginargs(name string, args string, primary bool) (string, error) {
 
 }
 
-func getnetplugin(client *kubernetes.Clientset, networkname string, primary bool) (string, error) {
+func getnetplugin(client *kubernetes.Clientset, namespace string, networkname string, primary bool) (string, error) {
 	if networkname == "" {
 		return "", fmt.Errorf("getnetplugin: network name can't be empty")
 	}
 
-	tprclient := fmt.Sprintf("/apis/kubernetes.com/v1/namespaces/default/networks/%s", networkname)
+	tprclient := fmt.Sprintf("/apis/kubernetes.com/v1/namespaces/%s/networks/%s", namespace, networkname)
 
+	var netobjdata []byte
 	netobjdata, err := client.ExtensionsV1beta1().RESTClient().Get().AbsPath(tprclient).DoRaw()
 	if err != nil {
-		return "", fmt.Errorf("getnetplugin: failed to get TRP, refer Multus README.md for the usage guide: %v", err)
+		// fallback on the default namespace
+		tprclient = fmt.Sprintf("/apis/kubernetes.com/v1/namespaces/default/networks/%s", networkname)
+		netobjdata, err = client.ExtensionsV1beta1().RESTClient().Get().AbsPath(tprclient).DoRaw()
+
+		if err != nil {
+			return "", fmt.Errorf("getnetplugin: failed to get TRP, refer Multus README.md for the usage guide: %v", err)
+		}
 	}
 
 	np := netplugin{}
@@ -360,7 +380,7 @@ func getnetplugin(client *kubernetes.Clientset, networkname string, primary bool
 	return netargs, nil
 }
 
-func getPodNetworkObj(client *kubernetes.Clientset, netObjs []map[string]interface{}) (string, error) {
+func getPodNetworkObj(client *kubernetes.Clientset, namespace string, netObjs []map[string]interface{}) (string, error) {
 
 	var np string
 	var err error
@@ -375,7 +395,7 @@ func getPodNetworkObj(client *kubernetes.Clientset, netObjs []map[string]interfa
 			primary = true
 		}
 
-		np, err = getnetplugin(client, net["name"].(string), primary)
+		np, err = getnetplugin(client, namespace, net["name"].(string), primary)
 		if err != nil {
 			return "", fmt.Errorf("getPodNetworkObj: failed in getting the netplugin: %v", err)
 		}
@@ -424,13 +444,23 @@ func getK8sNetwork(args *skel.CmdArgs, kubeconfig string) ([]map[string]interfac
 		return podNet, err
 	}
 
-	netAnnot, err := getPodNetworkAnnotation(k8sclient, k8sArgs)
+	pod, err := getPod(k8sclient, k8sArgs)
 	if err != nil {
 		return podNet, err
 	}
 
-	if len(netAnnot) == 0 {
+	netAnnot, ok := pod.Annotations["networks"]
+
+	if !ok {
 		return podNet, fmt.Errorf(`nonet`)
+	}
+
+	netNS := "default"
+	node, err := getNode(k8sclient, pod.Spec.NodeName)
+
+	val, ok := node.Annotations["networkNamespace"]
+	if err == nil && ok {
+		netNS = val
 	}
 
 	netObjs, err := parsePodNetworkObject(netAnnot)
@@ -438,7 +468,7 @@ func getK8sNetwork(args *skel.CmdArgs, kubeconfig string) ([]map[string]interfac
 		return podNet, err
 	}
 
-	multusDelegates, err := getPodNetworkObj(k8sclient, netObjs)
+	multusDelegates, err := getPodNetworkObj(k8sclient, netNS, netObjs)
 	if err != nil {
 		return podNet, err
 	}
