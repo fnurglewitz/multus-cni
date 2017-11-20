@@ -12,7 +12,7 @@ Table of Contents
       * [Work flow](#work-flow)
       * [Usage with Kubernetes CRD/TPR based Network Objects](#usage-with-kubernetes-crdtpr-based-network-objects)
          * [Creating “Network” third party resource in kubernetes](#creating-network-third-party-resource-in-kubernetes)
-            * [CDR based Network objects](#cdr-based-network-objects)
+            * [CRD based Network objects](#crd-based-network-objects)
             * [TPR based Network objects](#tpr-based-network-objects)
                * [Creating “Custom Network objects” third party resource in kubernetes](#creating-custom-network-objects-third-party-resource-in-kubernetes)
          * [Configuring Multus to use the kubeconfig](#configuring-multus-to-use-the-kubeconfig)
@@ -86,13 +86,19 @@ Go 1.5 users will need to set `GO15VENDOREXPERIMENT=1` to get vendored dependenc
 
 ## Usage with Kubernetes CRD/TPR based Network Objects
 
+Kubelet is responsible for establishing the network interfaces for each pod; it does this by invoking its configured CNI plugin. When Multus is invoked, it recovers pod annotations related to Multus, in turn, then it uses these annotations to recover a Kubernetes custom resource definition (CRD), which is an object that informs which plugins to invoke and the configuration needing to be passed to them. The order of plugin invocation is important as is the identity of the primary plugin.
+
 Please refer the Kubernetes Network SIG - Multiple Network PoC proposal for more details refer the link - [K8s Multiple Network proposal](https://docs.google.com/document/d/1TW3P4c8auWwYy-w_5afIPDcGNLK3LZf0m14943eVfVg/edit)
+
+<p align="center">
+   <img src="doc/images/multus_crd_usage_diagram.JPG" width="1008" />
+</p>
 
 ### Creating “Network” third party resource in kubernetes
 
-Multus is compatible to work with both CDR/TPR. Both CDR/TPR based network object api self link is same.
+Multus is compatible to work with both CRD/TPR. Both CRD/TPR based network object api self link is same.
 
-#### CDR based Network objects
+#### CRD based Network objects
 
 1. Create a Third party resource “crdnetwork.yaml” for the network object as shown below
 
